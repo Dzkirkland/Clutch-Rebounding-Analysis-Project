@@ -131,6 +131,12 @@ clutch_wide %>%
        x = "CRD/100 quintile", y = "Win %") +
   theme_minimal()
 
+clutch_wide %>%
+  filter(!is.na(crd_per100)) %>%
+  summarise(
+    cor_clutchwin = cor(crd_per100, win, use = "complete.obs")
+  )
+
 clutch_diff_summary_raw <- clutch_wide %>%
   filter(!is.na(clutch_diff)) %>%
   group_by(clutch_diff) %>%
