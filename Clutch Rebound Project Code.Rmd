@@ -1,24 +1,12 @@
----
-title: "Clutch Rebound Project Code"
-author: "David Kirkland"
-date: "`r Sys.Date()`"
-output: pdf_document
----
-
-```{r, echo=FALSE,message=FALSE}
 library(hoopR)
 library(dplyr)
 library(tidyr)
 library(tidyverse)
 library(ggplot2)
 library(scales)
-```
 
-```{r}
 pbp <- hoopR::load_nba_pbp(seasons = 2024)
-```
 
-```{r}
 clutch_pbp <- pbp %>%
   mutate(score_margin = abs(home_score - away_score),
          secs_left_qtr = start_quarter_seconds_remaining) %>%
@@ -27,9 +15,7 @@ clutch_pbp <- pbp %>%
     (period == 4 & secs_left_qtr <= 300) | (period >= 5),
     score_margin <= 5
   )
-```
 
-```{r}
 rebound_events <- c(
   "Defensive Rebound", "Offensive Rebound",
   "Layup Shot Putback", "Putback Dunk Shot", "Tip Shot"
@@ -38,9 +24,7 @@ rebound_events <- c(
 clutch_reb <- clutch_pbp %>%
   filter(type_text %in% rebound_events, !str_detect(type_text, "Free Throw")) %>%
   count(game_id, team_id, name = "clutch_reb")
-```
 
-```{r}
 clutch_team <- clutch_pbp %>%
   filter(type_text %in% rebound_events, !str_detect(type_text, "Free Throw")) %>%
   count(game_id, team_id, name = "clutch_reb") %>%
@@ -62,9 +46,7 @@ mutate(
   clutch_reb = replace(clutch_reb, is.na(clutch_reb), 0),
   clutch_poss = replace(clutch_poss, is.na(clutch_poss), 0)
 )
-```
 
-```{r}
 endgame <- pbp %>%
   filter(type_text == "End Game") %>%
   select(game_id, home_team_id, away_team_id, home_score, away_score)
@@ -122,9 +104,7 @@ clutch_wide <- clutch_team %>%
   ) %>%
   select(game_id, team_id, win, clutch_reb, opp_clutch_reb, clutch_poss, opp_clutch_poss,
          total_clutch_poss, clutch_diff, crd_per100)
-```
 
-```{r}
 clutch_diff_summary <- clutch_wide %>%
   filter(!is.na(crd_per100)) %>%
   mutate(bin = cut_number(crd_per100, n = 8)) %>%
@@ -150,9 +130,7 @@ clutch_wide %>%
   labs(title = "Game Win% by Clutch Rebound Differential (per 100 poss, quintiles)",
        x = "CRD/100 quintile", y = "Win %") +
   theme_minimal()
-```
 
-```{r}
 clutch_diff_summary_raw <- clutch_wide %>%
   filter(!is.na(clutch_diff)) %>%
   group_by(clutch_diff) %>%
@@ -176,9 +154,7 @@ ggplot(clutch_diff_summary_raw, aes(x = clutch_diff, y = win_pct)) +
     y = "Win %"
   ) +
   theme_minimal(base_size = 14)
-```
 
-```{r, message=FALSE}
 team_game <- clutch_wide %>%
   filter(!is.na(crd_per100)) %>%
   group_by(team_id) %>%
@@ -202,9 +178,7 @@ ggplot(team_game, aes(x = clutch_mean, y = team_win_pct)) +
     y = "Team's Season Win Percentage"
 ) +
 theme_minimal()
-```
 
-```{r, message=FALSE}
 team_clutch_games <- clutch_wide %>%
   filter(!is.na(crd_per100)) %>% # Only games with clutch data
   group_by(team_id) %>%
@@ -229,5 +203,4 @@ ggplot(team_clutch_games, aes(x = avg_crd_per100, y = clutch_win_pct)) +
     size = "Number of\nClutch Games"
 ) +
 theme_minimal()
-```
 
