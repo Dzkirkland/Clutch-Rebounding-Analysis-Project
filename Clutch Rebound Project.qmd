@@ -1,0 +1,327 @@
+---
+title: "Clutch Rebound Report"
+format: html
+editor: visual
+---
+
+## Introduction
+
+There are millions of ways that a team can win a game. Any sport, any level, there are seemingly infinite scenarios in which a group of players can impact a game in such a way that is propels their team to a win. Figuring out what specific ways players can do this is a main topic of conversation and research across every sport, and it was with that basic premise that our group found interest for this project. We decided to evaluate and formalize a metric called Clutch Rebounds and evaluate this metrics correlation with a team's win percentage in the specific game being evaluated. Previously, Clutch Rebounds were an informal description for when a player or team would record rebounds, usually in pivotal moments, near the end of a basketball game. We wanted to make this an official statistic and track whether it could help explain the a common way that team's manage to pull out wins.
+
+More specifically, we set parameters for what exactly qualified as a Clutch Rebound, evaluated games on a play by play basis to track the Clutch Rebounds by each team in each game where the conditions were met, and then ran analysis around the win percentage of teams in these games looking solely at the Clutch Rebound metric to separate them.
+
+As an example of a clutch rebound and the impact they can have is in the clip below. The Miami Heat were down 3 pts in the final moments of the 2013 NBA Finals game, which they had to win in order to stay alive in the finals. With the time winding down to less than 20 seconds left, the team lined up a 3pt shot to tie the game but they missed it. BUT, thanks to a rebound from Chris Bosh at this pivotal moment, the Heat maintained possession. Bosh passed the ball out to Ray Allen, who then made his 3pt attempt with 5 seconds remaining. The game went to overtime thanks to that play, where the Heat eventually won, tying the series at 3-3. The Heat would go on to win Game 7 of the series and thus, become NBA champions. <https://www.instagram.com/reel/Cto47bBgzH4/?utm_source=ig_web_copy_link>
+
+We focused our project on NBA play by play data from the 2024 season.
+
+```{r, echo=FALSE, message=FALSE}
+library(hoopR)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(scales)
+pbp <- hoopR::load_nba_pbp(seasons = 2024)
+```
+
+## Defining a Clutch Rebound
+
+Defining a clutch rebound, we started by detailed the absolute value of the difference between the home and away score at the time of each play, and tracked the amount of total seconds left in the current quarter of play, at the time of each play.
+
+From there, we filtered our original pbp data table to only hold the plays that happened in the 4th quarter or overtime of a game , that happened in the final 5 minutes of the 4th quarter, AND when the score margin was within 5 at the time of the current play. This shrinks the field of plays we are looking at to the final five minutes of every game, including overtime and keeps the importance of each play high since the score remains close. We played around with different parameters for what time period and score margin to hold the plays we were looking at to, but we decided on this mainly due to logical reasoning. It intuitively makes sense to only track the later stages of close game for these clutch rebounds. The difference in importance a rebound has on a game's outcome is certainly drastic between a rebound that occurs when there's a 20 point score margin in the middle of the 3rd quarter of a game, and a rebound when the score margin is 4 points with only minutes left. We decided on 5 minutes as it's slightly less than half a quarter so, we are more than halfway through the final quarter of the game, and 5 points as the score margin maximum, as a more arbitrary number of points that could separate two teams but have the difference in scores still feel close.
+
+```{r, echo=FALSE}
+clutch_pbp <- pbp %>%
+  mutate(score_margin = abs(home_score - away_score),
+         secs_left_qtr = start_quarter_seconds_remaining) %>%
+  filter(
+    period >= 4,
+    (period == 4 & secs_left_qtr <= 300) | (period >= 5),
+    score_margin <= 5
+  )
+```
+
+We next defined what plays qualified as rebounds, filtered through the data for just the plays that involved a rebound, and counted the number of clutch rebounds a team recorded in each game when applicable.
+
+Along with the traditional Offensive and Defensive Rebounds, we also included plays that were tracked in the play by play data as "Layup Shot Putback", "Putback Dunk Shot", and "Tip Shot". These plays all are described as a rebounding play in which the rebounding player scores on a shot attempt coming directly after the rebound, in most cases, on the same jump. We did not include any rebounds that came directly from free throws.
+
+With their inclusion, we had five play types that qualified as a rebound in the play by play data, and from there we made a separate data table with three columns. These columns took every rebound event in the clutch play by play data, and counted them up for each team, in each game.
+
+```{r, echo=FALSE, message=FALSE}
+rebound_events <- c(
+  "Defensive Rebound", "Offensive Rebound",
+  "Layup Shot Putback", "Putback Dunk Shot", "Tip Shot"
+)
+
+clutch_reb <- clutch_pbp %>%
+  filter(type_text %in% rebound_events, !str_detect(type_text, "Free Throw")) %>%
+  count(game_id, team_id, name = "clutch_reb")
+head(clutch_reb)
+```
+
+### Tracking Clutch Rebounds
+
+Next we tracked when the specified team has a possession by tracking who possesses the ball during the clutch time frame and adding 1 to the tally when the team gains possession. Then summing that up, and adding the total to the data table.
+
+```{r, echo=FALSE}
+clutch_team <- clutch_pbp %>%
+  filter(type_text %in% rebound_events, !str_detect(type_text, "Free Throw")) %>%
+  count(game_id, team_id, name = "clutch_reb") %>%
+  
+  full_join(
+    clutch_pbp %>%
+      arrange(game_id, sequence_number) %>%
+      group_by(game_id) %>%
+      mutate(lead_team = dplyr::lead(team_id)) %>%
+      ungroup() %>%
+      transmute(game_id,
+                poss_change = team_id != lead_team,
+                poss_team = lead_team) %>%
+      filter(!is.na(poss_team), poss_change) %>%
+      count(game_id, team_id = poss_team, name = "clutch_poss"),
+    by = c("game_id", "team_id")
+  ) %>%
+  mutate(
+    clutch_reb = replace(clutch_reb, is.na(clutch_reb), 0),
+    clutch_poss = replace(clutch_poss, is.na(clutch_poss), 0)
+  )
+```
+
+Now that we had a data table with the amount of clutch rebounds and possessions for each team in every game where our clutch conditions were met, it was time to evaluate the results of these games and calculate the difference in clutch rebounds.
+
+## Clutch Rebound Differential (CRD)
+
+We then designated a win for the winning team, the clutch rebound data and possession data for both the team and their opponent, the differential between the tracked team's clutch rebound total and their opponents total, and a clutch rebound differential per 100 possessions (crd/100) column.
+
+The clutch rebound differential per 100 possessions column takes the clutch rebound differential, or the difference between the tracked team's clutch rebounds and their opponents' and divides that number by the amount of clutch possessions both teams logged in the period, with safeguards that don't count games that have the unlikely but possible scenario that both teams don't log any possessions in the time frame. Once it has that number it multiplies it by 100, which is roughly the average number of possessions an team will have in a singular NBA game, to make the difference in clutch rebounds be less about the difference in number of possessions a team had in the clutch time zone, and more about their clutch rebound differential against their opponent.
+
+Scaling this metric by 100 to simulate a full games' worth of possessions may very well not be the best approach to tackling this idea, considering that the "clutch" timeframe we have established is clearly limited to a small section of the game we feel is substantially different to the rest. That being said, the reason we decided to do so, is to give more weight to teams clutch rebounding performance against their opponent, and in essence stretching this idea out over an entire close game. It's not perfect, but for us, it helped us see which performances were truly based on clutch rebounding whenever they had the chance, versus just managing to out rebound your opponent with lots of chances based on total possessions.
+
+#### Data Correction
+
+The data had one game without a correct win result for the teams, so we had to manually go back in and correct the results of the game, and we filled in the data so every team that didn't record a clutch rebound but their opponent did, still had data.
+
+```{r, echo=FALSE}
+endgame <- pbp %>%
+  filter(type_text == "End Game") %>%
+  select(game_id, home_team_id, away_team_id, home_score, away_score)
+
+clutch_wide <- clutch_team %>%
+  left_join(endgame, by = "game_id") %>%
+  mutate(team_role = if_else(team_id == home_team_id, "home", "away"),
+         opp_id    = if_else(team_role == "home", away_team_id, home_team_id)) %>%
+  left_join(clutch_team %>% 
+              rename(opp_id = team_id,
+                     opp_clutch_reb = clutch_reb,
+                     opp_clutch_poss = clutch_poss),
+            by = c("game_id","opp_id")) %>%
+  mutate(
+    # Replace NA with 0 for clutch_reb and clutch_poss
+    clutch_reb = replace_na(clutch_reb, 0L),
+    clutch_poss = replace_na(clutch_poss, 0L),
+    opp_clutch_reb  = replace_na(opp_clutch_reb, 0L),
+    opp_clutch_poss = replace_na(opp_clutch_poss, 0L),
+    team_score = if_else(team_role=="home", home_score, away_score),
+    opp_score  = if_else(team_role=="home", away_score, home_score),
+    win = as.integer(team_score > opp_score),
+    clutch_diff = as.numeric(clutch_reb - opp_clutch_reb),
+    # NEW: Add total clutch possessions column
+    total_clutch_poss = clutch_poss + opp_clutch_poss,
+    crd_per100  = if_else(total_clutch_poss > 0,
+                          100 * clutch_diff / total_clutch_poss,
+                          NA_real_)
+  ) %>%
+  # Manual data correction update
+  mutate(
+    win = case_when(
+      row_number() == 595 ~ 1,
+      row_number() == 596 ~ 0,
+      TRUE ~ win
+    ),
+    opp_clutch_reb = case_when(
+      row_number() == 595 ~ 3,
+      row_number() == 596 ~ 7,
+      TRUE ~ opp_clutch_reb
+    ),
+    opp_clutch_poss = case_when(
+      row_number() == 595 ~ 9,
+      row_number() == 596 ~ 9,
+      TRUE ~ opp_clutch_poss
+    )
+  ) %>%
+  # Recalculating clutch_diff and crd_per100 after manual update
+  mutate(
+    clutch_diff = as.numeric(clutch_reb - opp_clutch_reb),
+    total_clutch_poss = clutch_poss + opp_clutch_poss,
+    crd_per100  = if_else(total_clutch_poss > 0,
+                          100 * clutch_diff / total_clutch_poss,
+                          NA_real_)
+  ) %>%
+  select(game_id, team_id, win, clutch_reb, opp_clutch_reb, clutch_poss, opp_clutch_poss,
+         total_clutch_poss, clutch_diff, crd_per100)
+```
+
+## Win % by Clutch Rebound Differential 
+
+Next, we binned the data into 8 equal quantiles based on the crd_per100 values from the above data table, from the bottom 12.5% of values, to the top 12.5% of values. We then calculated the amount of games that had their crd_per100 value land in that bin, 2 rows included per game with different bins for the 2 results (winning and losing team's values), and the win percentage of the teams in those specific games and taking the mean.
+
+```{r, echo=FALSE}
+clutch_diff_summary <- clutch_wide %>%
+  filter(!is.na(crd_per100)) %>%
+  mutate(bin = cut_number(crd_per100, n = 8)) %>%
+  group_by(bin) %>%
+  summarise(
+    games   = dplyr::n(),
+    win_pct = mean(win, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+clutch_wide %>%
+  filter(!is.na(crd_per100)) %>%
+  mutate(bin = cut_number(crd_per100, n = 8)) %>%
+  group_by(bin) %>%
+  summarise(win_pct = mean(win), n=n(), .groups="drop") %>%
+  ggplot(aes(x = bin, y = win_pct, fill = win_pct)) +
+  geom_col() +
+  geom_text(aes(label = scales::percent(win_pct, accuracy = 0.1)), vjust = -0.3) +
+  geom_text(aes(label = paste0("n=", n), y = win_pct/2), 
+            color = "white", size = 3, fontface = "bold") +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  scale_fill_gradient(low = "darkred", high = "green", name = "Win %") +
+  labs(title = "Game Win% by Clutch Rebound Differential (per 100 poss, quintiles)",
+       x = "CRD/100 quintile", y = "Win %") +
+  theme_minimal()
+```
+
+Looking at the resulting table, we see a decently even spread of amount of games for each bin, with a dip in the bin taking in crd_per100 values from (0,4\] which makes sense as this mainly contains games where the clutch rebound differential value was either 0, or 1 but with the teams having lots of possessions in the timeframe. To ease our analyzation efforts we then put this table's results into a bar chart.
+
+Analyzing this chart, we see a steady increase in win percentage as the crd_per100 value rises from bin to bin. Teams on average win just over 30% of their games when their crd_per100 value falls between \[-200,-20\] and this win percentage gradually increases as teams' crd_per100 value rises, all the way to teams winning a little more than 70% of their games in when their crd_per100 value was between (20,200\]. There is a non-surprising steadiness around 50% for teams that had small crd_per100 values, meaning that in these games where there was little seperation between the two teams clutch rebounding, the win was split more evenly.
+
+Explaining these results in a simpler manner, this chart is showing that the better a team did in rebounding at the end of a close game against their opponent in the 2024 NBA season, especially with limited opportunities via possessions, the more likely it was that team won the game, with a 40% spread of win percentage from teams worst to best clutch rebounding performances. The chart has the number of games with the team's crd_per100 value falling into that bin, placed in the middle.
+
+##### Model Clarification
+
+An important clarification here, our project does not have any predictive power. We are NOT using a model to predict whether or not a team has a better chance of winning a game if they have more clutch rebounds. We are simply combing through the data to look at the results, as if this was an established metric.
+
+## Follow-Up CRD Analysis
+
+Looking at these results, we wondered about the context of rebounds affecting win percentage in general. Based on the table and chart above there certainly seems to be some relationship between crd_per100 and win percentage, but is it important? Is it more or less noticeable than just with the raw clutch rebound differential? What about rebound differential over a whole game and the resulting win percentages? Without embarking on a whole new project, we wanted to provide context for our results.
+
+### CRD and Win % Correlation
+
+To start we computed the correlation between the crd_per100 values and win percentage. Given the chart above, we expected this to be somewhat substantial but after computing the value it was just .251 which is not very negligible. This implies that, sure, the numbers looked great, but it is more likely that other factors were more influential in determining win percentage than just crd_per100.
+
+```{r}
+clutch_wide %>%
+  filter(!is.na(crd_per100)) %>%
+  summarise(
+    cor_clutchwin = cor(crd_per100, win, use = "complete.obs")
+  )
+```
+
+### Raw CRD and Win%
+
+Next we wanted to look at the raw differentials of clutch rebounds in games and the corresponding win percentage values for those and compare with what we found for our crd_per100 metric.
+
+```{r, echo=FALSE}
+clutch_diff_summary_raw <- clutch_wide %>%
+  filter(!is.na(clutch_diff)) %>%
+  group_by(clutch_diff) %>%
+  summarise(
+    games   = dplyr::n(),
+    win_pct = mean(win),
+    .groups = "drop"
+  )
+
+ggplot(clutch_diff_summary_raw, aes(x = clutch_diff, y = win_pct)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = scales::percent(win_pct, accuracy = 1)),
+            vjust = -0.5, size = 3) +
+  geom_text(aes(label = paste0("n=", games), y = win_pct/2), 
+            angle = 90, hjust = -0.1, color = "white", 
+            size = 3, fontface = "bold") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 1)) +
+  labs(
+    title = "Win % by Raw Clutch Rebound Differential (Team − Opponent)",
+    x = "Clutch Rebound Differential (raw, not per 100)",
+    y = "Win %"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+Here you can see what all of the clutch rebound differentials were in games in the 2024 NBA season and we again added how many games at that crd. Unlike with our per100 chart, here there is a much wider discrepancy between the amount of games played at each result, leading to some more volatile win percentage values. Examples of this are easily seen at either extreme of the clutch rebound differential variable, with teams winning either 100% or 0% of their games when they had more than or less than 11 clutch rebounds over their opponent respectively. Having exactly 8 more or less clutch rebounds is also an interesting mark on the graph, with teams in those 12 games winning just 33% when having exactly 8 more clutch rebounds than their opponent. Another thing of note about the chart, is that every value is symmetrical around 0, because every game has 2 clutch rebound differentials, which are the absolute value of each other.
+
+Analyzing the table, there is generally a linear rise as teams performed better in the clutch rebound differential metric. This is consistent with the results from our crd_per100 results and when running the correlation of clutch rebound differential and wins, the value is very similar. Between the two there isn't much separation, but crd_per100, as mentioned previously, puts more context into the clutch rebounds based on possessions, where as the raw data purely rewards amount of rebounds in clutch time, against your opponent's rebounds.
+
+### NBA Team CRD/100
+
+Next, we wanted to go over was if there seemed to be any correlation between teams that were better at
+clutch rebounding throughout the season and their success on the season as a whole. We filtered through each crd_per100 value and matched them by team, then computed each team’s mean crd_per100 and season win percentage for every game, not just the games with clutch rebounds. Then we calculated the correlation between the two variables and then plotted the results. This plot helps give context to the question of “Is clutch rebounding ability a characteristic of successful teams?”
+
+```{r, message=FALSE, echo=FALSE}
+team_game <- clutch_wide %>%
+  filter(!is.na(crd_per100)) %>%
+  group_by(team_id) %>%
+  summarise(
+    games = n(),
+    clutch_mean = mean(crd_per100),
+    team_win_pct = mean(win),
+    .groups = "drop"
+  )
+cor_result <- team_game %>%
+  summarise(cor_clutchwin = cor(clutch_mean, team_win_pct, use = "complete.obs")) %>%
+  pull(cor_clutchwin)
+ggplot(team_game, aes(x = clutch_mean, y = team_win_pct)) +
+  geom_point(color = "steelblue", alpha = 0.7, size = 3) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Relationship Between Clutch Rebounding (CRD/100) and Win Percentage",
+    subtitle = paste("Team-Level Correlation: r =", round(cor_result, 2)),
+    x = "Average Clutch Rebound Differential per 100 Possessions (CRD/100)",
+    y = "Team's Season Win Percentage"
+  ) +
+  theme_minimal()
+```
+
+Looking at the results, we see a decent correlation between the two at 0.4. This indicates that teams in the 2024 NBA season that on average did a better job of clutch rebounding compared to their game by game opponents overall had higher team win percentages for the whole season. This doesn’t imply that is because of a team’s average crd_per100 value, but it’s notable that there was notable positive correlation between the two.
+
+### Close Games Win % & CRD/100
+
+The final stat we looked into came from looking at team’s win percentage in specific games where they recorded clutch rebounds, versus their average crd_per100 for the season. Unlike the correlation plot above, this correlation plot we made compares the correlation between each and every teams avg crd_per100 for the season and what their win percentage was in those games, not their win percentage in every game regardless of whether it was close or not. Here we try and look at teams specific success in close games based on their clutch rebounding and see if there is a strong relationship.
+
+```{r, echo=FALSE, message=FALSE}
+team_clutch_games <- clutch_wide %>%
+  filter(!is.na(crd_per100)) %>% # Only games with clutch data
+  group_by(team_id) %>%
+  summarise(
+    clutch_games = n(),
+    clutch_win_pct = mean(win),
+    avg_crd_per100 = mean(crd_per100),
+    .groups = "drop"
+  )
+clutch_cor_result <- team_clutch_games %>%
+  summarise(cor_clutchwin = cor(avg_crd_per100, clutch_win_pct, use = "complete.obs")) %>%
+  pull(cor_clutchwin)
+ggplot(team_clutch_games, aes(x = avg_crd_per100, y = clutch_win_pct)) +
+  geom_point(aes(size = clutch_games), color = "steelblue", alpha = 0.7) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred", linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Win Percentage in Clutch Games vs Clutch Rebounding",
+    subtitle = paste("Correlation in Clutch Games: r =", round(clutch_cor_result, 3)),
+    x = "Average CRD/100 in Clutch Games",
+    y = "Win Percentage in Clutch Games",
+    size = "Number of\nClutch Games"
+  ) +
+  theme_minimal()
+```
+
+This plot scales the size of the points based on how many games that team played in which they had a clutch rebound differential. This plot has a very similar correlation value to the one above, this at .398 which indicates a noticeable relationship between the two variables. Once again we cannot say anything with certainty, but we once again we can see there is correlation between teams that were better at gathering clutch rebounds, and those teams winning more of these close games.
+
+## Conclusion
+
+With no predictive power, it is very possible that our results were a single season glitch. Without looking at the same play by play data for a different NBA season we cannot say whether our newly formalized metric for clutch rebounding continues to carry the same amount of correlation with teams winning these close games or not, but with logically reasoning it seems very likely. Rebounds are a crucial part of basketball. As mentioned before they can keep alive a play that scored no points and give your team another chance to change the score. Rebounds can be very regular or mundane, they happen in every game, in every minute of play, but focusing on rebounds that occur in the late stages of a close game, and evaluating whether or not teams that did better than their opponents ended up winning those games, we have shown there to be strong correlation in the data that grants to two ideas a connection.
+
+For as long as the game has been alive, the idea of coming up with big time rebounds has been important, and despite the lack of tracking, they have long been identified as important plays that can dramatically affect the chances a team has of winning a game. With our process and parameterization we have started the process of creating this official metric, and tracking just how influential this statistic is on a team’s chances of winning a game when it matters
+most.
