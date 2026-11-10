@@ -1,0 +1,1 @@
+This Clutch Rebound Project was a Sports Analytics class assignment focused on building a new metric and evaluating it's performance/results. My two project partners and I came up with the idea to look into clutch rebounds in basketball, define and record it as a metric for a season of NBA basketball, and see if there was any relevance or correlation to positive results.
